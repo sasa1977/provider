@@ -1,99 +1,11 @@
 defmodule ProviderTest do
   use ExUnit.Case, async: true
   alias Provider
+  alias ProviderTest.ProcDictCache
   alias ProviderTest.TestModule
 
-  describe "fetch_one" do
-    test "returns correct value" do
-      param = param_spec()
-      System.put_env(param.os_env_name, "some value")
-      assert Provider.fetch_one(Provider.SystemEnv, param.name, param.opts) == {:ok, "some value"}
-    end
-
-    test "returns default value if OS env is not set" do
-      param = param_spec(default: "default value")
-
-      assert Provider.fetch_one(Provider.SystemEnv, param.name, param.opts) ==
-               {:ok, "default value"}
-    end
-
-    test "ignores default value and returns OS env value if it's available" do
-      param = param_spec(default: "default value")
-      System.put_env(param.os_env_name, "os env value")
-
-      assert Provider.fetch_one(Provider.SystemEnv, param.name, param.opts) ==
-               {:ok, "os env value"}
-    end
-
-    test "converts to integer" do
-      param = param_spec(type: :integer, default: 123)
-
-      assert Provider.fetch_one(Provider.SystemEnv, param.name, param.opts) == {:ok, 123}
-
-      System.put_env(param.os_env_name, "456")
-      assert Provider.fetch_one(Provider.SystemEnv, param.name, param.opts) == {:ok, 456}
-    end
-
-    test "converts to float" do
-      param = param_spec(type: :float, default: 3.14)
-
-      assert Provider.fetch_one(Provider.SystemEnv, param.name, param.opts) == {:ok, 3.14}
-
-      System.put_env(param.os_env_name, "2.72")
-      assert Provider.fetch_one(Provider.SystemEnv, param.name, param.opts) == {:ok, 2.72}
-    end
-
-    test "converts to boolean" do
-      param = param_spec(type: :boolean, default: true)
-
-      assert Provider.fetch_one(Provider.SystemEnv, param.name, param.opts) == {:ok, true}
-
-      System.put_env(param.os_env_name, "false")
-      assert Provider.fetch_one(Provider.SystemEnv, param.name, param.opts) == {:ok, false}
-    end
-
-    test "reports error on missing value" do
-      param = param_spec()
-
-      assert Provider.fetch_one(Provider.SystemEnv, param.name, param.opts) ==
-               {:error, [error(param, "is missing")]}
-    end
-
-    test "empty string is treated as a missing value" do
-      param = param_spec()
-      System.put_env(param.os_env_name, "")
-
-      assert Provider.fetch_one(Provider.SystemEnv, param.name, param.opts) ==
-               {:error, [error(param, "is missing")]}
-    end
-
-    for type <- ~w/integer float boolean/a do
-      test "reports error on #{type} conversion" do
-        param = param_spec(type: unquote(type), default: 123)
-        System.put_env(param.os_env_name, "invalid value")
-
-        assert Provider.fetch_one(Provider.SystemEnv, param.name, param.opts) ==
-                 {:error, [error(param, "is invalid")]}
-      end
-    end
-  end
-
-  describe "fetch_one!" do
-    test "returns correct value" do
-      param = param_spec()
-      System.put_env(param.os_env_name, "some value")
-      assert Provider.fetch_one!(Provider.SystemEnv, param.name, param.opts) == "some value"
-    end
-
-    test "returns default value if OS env is not set" do
-      param = param_spec()
-
-      assert_raise(
-        RuntimeError,
-        "#{param.os_env_name} is missing",
-        fn -> Provider.fetch_one!(Provider.SystemEnv, param.name, param.opts) end
-      )
-    end
+  setup_all do
+    Application.put_env(:provider, :cache, ProcDictCache)
   end
 
   describe "fetch_all" do
@@ -130,45 +42,18 @@ defmodule ProviderTest do
       Enum.each(1..7, &System.delete_env("OPT_#{&1}"))
     end
 
-    test "fetch_all/0 succeeds for correct data" do
-      System.put_env("OPT_1", "qux")
-      System.put_env("OPT_2", "42")
-      System.put_env("OPT_6", "false")
-      System.put_env("OPT_7", "3.14")
-
-      assert TestModule.fetch_all() ==
-               {:ok,
-                %{
-                  opt_1: "qux",
-                  opt_2: 42,
-                  opt_3: "foo",
-                  opt_4: "bar",
-                  opt_5: "baz",
-                  opt_6: false,
-                  opt_7: 3.14
-                }}
-    end
-
-    test "fetch_all/0 returns errors for invalid data" do
-      assert TestModule.fetch_all() ==
-               {
-                 :error,
-                 ["OPT_1 is missing", "OPT_2 is missing", "OPT_6 is missing", "OPT_7 is missing"]
-               }
-    end
-
-    test "validate!/0 succeeds for correct data" do
+    test "load!/0 succeeds for correct data" do
       System.put_env("OPT_1", "some data")
       System.put_env("OPT_2", "42")
       System.put_env("OPT_6", "false")
       System.put_env("OPT_7", "3.14")
 
-      assert TestModule.validate!() == :ok
+      assert TestModule.load!() == :ok
     end
 
-    test "validate!/0 raises on error" do
+    test "load!/0 raises on error" do
       System.put_env("OPT_2", "foobar")
-      error = assert_raise RuntimeError, fn -> TestModule.validate!() end
+      error = assert_raise RuntimeError, fn -> TestModule.load!() end
       assert error.message =~ "OPT_1 is missing"
       assert error.message =~ "OPT_2 is invalid"
       assert error.message =~ "OPT_6 is missing"
@@ -180,6 +65,8 @@ defmodule ProviderTest do
       System.put_env("OPT_2", "42")
       System.put_env("OPT_6", "false")
       System.put_env("OPT_7", "3.14")
+
+      TestModule.load!()
 
       assert TestModule.opt_1() == "some data"
       assert TestModule.opt_2() == 42
@@ -250,5 +137,22 @@ defmodule ProviderTest do
       ]
 
     defp bar, do: "bar"
+  end
+
+  defmodule ProcDictCache do
+    @behaviour Provider.Cache
+
+    @impl true
+    def set(mod, key, val) do
+      Process.put({mod, key}, val)
+    end
+
+    @impl true
+    def get(mod, key) do
+      case Process.get({mod, key}, :undefined) do
+        :undefined -> {:error, :not_found}
+        v -> {:ok, v}
+      end
+    end
   end
 end
