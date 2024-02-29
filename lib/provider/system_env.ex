@@ -6,10 +6,11 @@ defmodule Provider.SystemEnv do
   alias Provider.Source
 
   @impl Source
-  def display_name(param_name), do: param_name |> Atom.to_string() |> String.upcase()
+  def display_name(param_name, _spec), do: param_name |> Atom.to_string() |> String.upcase()
 
   @impl Source
-  def values(param_names), do: Enum.map(param_names, &System.get_env(display_name(&1)))
+  def values(params, _opts),
+    do: Enum.map(params, fn {k, spec} -> k |> display_name(spec) |> System.get_env() end)
 
   @impl Source
   def template(params) do
@@ -21,14 +22,14 @@ defmodule Provider.SystemEnv do
   defp param_entry({name, %{default: nil} = spec}) do
     """
     # #{spec.type}
-    #{display_name(name)}=
+    #{display_name(name, spec)}=
     """
   end
 
   defp param_entry({name, spec}) do
     """
     # #{spec.type}
-    # #{display_name(name)}="#{String.replace(to_string(spec.default), "\n", "\\n")}"
+    # #{display_name(name, spec)}="#{String.replace(to_string(spec.default), "\n", "\\n")}"
     """
   end
 end
